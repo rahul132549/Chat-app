@@ -1,0 +1,21 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<h2>Users</h2>
+<div class="list-group">
+    {% for user in users %}
+    <a href="{% url 'chat' user.id %}" class="list-group-item list-group-item-action d-flex justify-content-between align-items-center">
+        <div>
+            <strong>{{ user.username }}</strong>
+            <small class="text-muted">{{ user.email }}</small>
+            <span class="{% if user.is_online %}online-dot{% else %}offline-dot{% endif %}"></span>
+        </div>
+        {% if user.unread_count > 0 %}
+        <span class="badge bg-primary rounded-pill">{{ user.unread_count }}</span>
+        {% endif %}
+    </a>
+    {% empty %}
+    <p class="text-muted">No other users found.</p>
+    {% endfor %}
+</div>
+{% endblock %}

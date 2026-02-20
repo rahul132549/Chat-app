@@ -1,0 +1,155 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block extra_css %}
+{% block body_class %}chat-bg{% endblock %}
+<style>
+    .chat-bg {
+    background-color: #ccf0f3;
+}
+    .chat-container { height: 900px; overflow-y: auto; display: flex; flex-direction: column; padding: 10px; background: #fdfcfc; border: 1px solid #eee; }
+    .message { max-width: 75%; margin-bottom: 15px; padding: 10px 12px; border-radius: 12px; font-size: 0.95rem; position: relative; line-height: 1.4; }
+    .message.sent { align-self: flex-end; background-color: #0084ff; color: white; border-bottom-right-radius: 2px; }
+    .message.received { align-self: flex-start; background-color: #e4e6eb; color: black; border-bottom-left-radius: 2px; }
+    .message small { display: block; font-size: 0.7rem; margin-top: 5px; opacity: 0.8; }
+    .message-input {height: 45px;font-size: 0.65rem;}
+    
+    /* Edit and Delete links */
+    .action-links a { font-size: 0.65rem; margin-left: 8px; color: #ffeb3b !important; text-decoration: none; opacity: 0; transition: opacity 0.2s; }
+    .message.sent:hover .action-links a { opacity: 1; }
+    
+    .read-status { margin-left: 5px; font-weight: bold; }
+    .typing-indicator { font-size: 0.85rem; color: #65676b; margin-bottom: 10px; padding-left: 10px; font-style: italic; height: 20px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="row">
+        <div class="col-md-8 offset-md-2">
+            <div class="card shadow-sm">
+                <div class="card-header bg-white d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0">Chat with <strong>{{ other_user.username }}</strong></h5>
+                    <span id="user-status" class="badge {% if other_user.is_online %}bg-success{% else %}bg-secondary{% endif %}">
+                        {% if other_user.is_online %}Online{% else %}Offline{% endif %}
+                    </span>
+                </div>
+                <div class="card-body p-0">
+                    <div id="chat-messages" class="chat-container">
+                        {% for message in messages %}
+                            <div class="message {% if message.sender.id == request.user.id %}sent{% else %}received{% endif %}" id="msg-{{ message.id }}">
+                                <div class="msg-text">{{ message.content }}</div>
+                                <small>
+                                    {{ message.timestamp|date:"H:i" }}
+                                    {% if message.sender.id == request.user.id %}
+                                        <span class="read-status">{% if message.is_read %}✓✓{% else %}✓{% endif %}</span>
+                                        <span class="action-links">
+                                            <a href="javascript:void(0)" onclick="editMsg('{{ message.id }}')">Edit</a>
+                                            <a href="javascript:void(0)" onclick="deleteMsg('{{ message.id }}')">Del</a>
+                                        </span>
+                                    {% endif %}
+                                </small>
+                            </div>
+                        {% endfor %}
+                    </div>
+                    <div id="typing-indicator" class="typing-indicator"></div>
+                    <div class="p-3 border-top">
+                        <form id="message-form">
+                            <div class="input-group">
+                                <input type="text" id="message-input" class="form-control border-0 bg-light " placeholder="Type a message..." autocomplete="off" style="width:10px;">
+
+                                <button type="submit" class="btn btn-primary px-4">Send</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    const currentUserId = Number("{{ request.user.id }}");
+    const otherUserId = "{{ other_user.id }}";
+    const otherUsername = "{{ other_user.username }}";
+    const wsScheme = window.location.protocol === "https:" ? "wss" : "ws";
+    const chatSocket = new WebSocket(`${wsScheme}://${window.location.host}/ws/chat/${otherUserId}/`);
+
+    const chatMessages = document.getElementById('chat-messages');
+    const messageInput = document.getElementById('message-input');
+    const typingIndicator = document.getElementById('typing-indicator');
+
+    function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; }
+    scrollToBottom();
+
+    chatSocket.onmessage = function(e) {
+        const data = JSON.parse(e.data);
+        
+        if (data.type === 'message') {
+            const isMe = data.sender_id === currentUserId;
+            const msgDiv = document.createElement('div');
+            msgDiv.className = `message ${isMe ? 'sent' : 'received'}`;
+            msgDiv.id = `msg-${data.message_id}`;
+            const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            
+            msgDiv.innerHTML = `
+                <div class="msg-text">${data.content}</div>
+                <small>
+                    ${time}
+                    ${isMe ? ' <span class="read-status">✓</span>' : ''}
+                    ${isMe ? ` <span class="action-links"><a href="javascript:void(0)" onclick="editMsg('${data.message_id}')">Edit</a><a href="javascript:void(0)" onclick="deleteMsg('${data.message_id}')">Del</a></span>` : ''}
+                </small>`;
+            chatMessages.appendChild(msgDiv);
+            scrollToBottom();
+            if(!isMe) chatSocket.send(JSON.stringify({'type': 'read_receipt'}));
+
+        } else if (data.type === 'message_deleted') {
+            document.getElementById(`msg-${data.message_id}`)?.remove();
+
+        } else if (data.type === 'message_edited') {
+            const txt = document.querySelector(`#msg-${data.message_id} .msg-text`);
+            if(txt) txt.innerText = data.content + " (edited)";
+
+        } else if (data.type === 'read_receipt') {
+            document.querySelectorAll('.message.sent .read-status').forEach(el => el.textContent = '✓✓');
+
+        } else if (data.type === 'typing') {
+            if (data.user_id != currentUserId) {
+                typingIndicator.textContent = data.is_typing ? `${otherUsername} is typing...` : '';
+            }
+        }
+    };
+
+    document.getElementById('message-form').onsubmit = function(e) {
+        e.preventDefault();
+        const content = messageInput.value.trim();
+        if (content) {
+            chatSocket.send(JSON.stringify({'type': 'message', 'content': content}));
+            messageInput.value = '';
+            sendTyping(false);
+        }
+    };
+
+    function deleteMsg(id) { 
+        if(confirm("Delete message for everyone?")) {
+            chatSocket.send(JSON.stringify({'type': 'delete_message', 'message_id': id}));
+        }
+    }
+    
+    function editMsg(id) {
+        const old = document.querySelector(`#msg-${id} .msg-text`).innerText.replace(" (edited)", "");
+        const val = prompt("Edit message:", old);
+        if(val && val.trim() !== old) {
+            chatSocket.send(JSON.stringify({'type': 'edit_message', 'message_id': id, 'content': val}));
+        }
+    }
+
+    let tTimer;
+    function sendTyping(s) { chatSocket.send(JSON.stringify({'type': 'typing', 'is_typing': s})); }
+    messageInput.oninput = () => { sendTyping(true); clearTimeout(tTimer); tTimer = setTimeout(() => sendTyping(false), 2000); };
+</script>
+{% endblock %}
+
+
